@@ -1,12 +1,11 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import folium
 from streamlit_folium import st_folium
 import requests
-import numpy as np
 
-# 1. Récupération + géocodage des données (mis en cache)
-@st.cache_data(show_spinner="Chargement des données...")
+@st.cache_data(show_spinner="Chargement des données météo...")
 def get_weather_data():
     lat_grid = np.arange(47.9, 49.5, 0.225)
     lon_grid = np.arange(4.5, 7.3, 0.325)
@@ -19,14 +18,12 @@ def get_weather_data():
         key = (round(lat, 3), round(lon, 3))
         if key in commune_cache:
             return commune_cache[key]
-
         url = "https://nominatim.openstreetmap.org/reverse"
         params = {
             'lat': lat, 'lon': lon,
             'format': 'jsonv2', 'zoom': 10,
             'addressdetails': 1
         }
-
         try:
             r = requests.get(url, params=params, headers={"User-Agent": "geo-app"})
             if r.status_code == 200:
@@ -73,50 +70,116 @@ def get_weather_data():
 
     if results:
         df_all = pd.concat(results, ignore_index=True)
-        # Filtrer uniquement départements 54, 55, 88
-        return df_all[df_all["dept"].isin(["54", "55", "88"])].copy()
+        df_all = df_all[df_all["dept"].isin(["54", "55", "88"])].copy()
+        df_all['date'] = df_all['datetime'].dt.date
+        return df_all
     else:
         return pd.DataFrame()
 
-# --- Streamlit UI ---
+# App Streamlit
+st.set_page_config(layout="wide")
+st.title("Prévisions météo - Popup détaillé par commune")
 
-st.title("Prévisions météo (54, 55, 88)")
-st.markdown("Carte interactive avec données à J+7")
-
-# Chargement des données
 df = get_weather_data()
 
 if df.empty:
-    st.warning("Aucune donnée météo disponible.")
+    st.error("Pas de données récupérées.")
     st.stop()
 
-# Convertir datetime en date pour le filtre
-df['date'] = df['datetime'].dt.date
-dates = df['date'].unique()
-start_date = st.date_input("Date de début", value=dates.min(), min_value=dates.min(), max_value=dates.max())
-end_date = st.date_input("Date de fin", value=dates.max(), min_value=dates.min(), max_value=dates.max())
+# Sélecteurs de date
+dates = df["date"].dropna().unique()
+min_d, max_d = min(dates), max(dates)
+
+col1, col2 = st.columns(2)
+with col1:
+    start_date = st.date_input("Date de début", min_value=min_d, max_value=max_d, value=min_d)
+with col2:
+    end_date = st.date_input("Date de fin", min_value=min_d, max_value=max_d, value=max_d)
 
 if start_date > end_date:
-    st.error("La date de début doit être antérieure à la date de fin.")
+    st.warning("⚠️ La date de début est postérieure à la date de fin.")
     st.stop()
 
-# Filtrer le dataframe selon les dates choisies
-df_filtered = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+df_period = df[(df["date"] >= start_date) & (df["date"] <= end_date)].copy()
+if df_period.empty:
+    st.warning("Aucune donnée sur la période sélectionnée.")
+    st.stop()
 
-# Création carte Folium
+days = (end_date - start_date).days + 1
+df_period["date_day"] = df_period["datetime"].dt.date
+
+# === Fonctions pour popup détaillé ===
+
+def make_popup_single(row):
+    return (
+        f"<b>{row['commune']}</b><br>"
+        f"Température moyenne : {row['temp_ICON']:.2f} °C<br>"
+        f"Humidité moyenne : {row['hygro_ICON']:.2f} %<br>"
+        f"Précipitations totales : {row['pluvio_GFS']:.2f} mm"
+    )
+
+def make_popup_table(commune, temp_df, hygro_df, pluvio_df, dates):
+    rows = []
+    header = "<tr><th>Variable</th>" + "".join(f"<th>{d.strftime('%m-%d')}</th>" for d in dates) + "</tr>"
+    rows.append(header)
+
+    def make_row(label, df):
+        cells = []
+        for d in dates:
+            try:
+                val = df.loc[commune, d]
+                cell = "NA" if pd.isna(val) else f"{val:.2f}"
+            except:
+                cell = "NA"
+            cells.append(f"<td>{cell}</td>")
+        return f"<tr><td>{label}</td>" + "".join(cells) + "</tr>"
+
+    rows.append(make_row("Température (°C)", temp_df))
+    rows.append(make_row("Humidité (%)", hygro_df))
+    rows.append(make_row("Précipitations (mm)", pluvio_df))
+
+    table_html = "<table border='1' style='border-collapse: collapse; font-size: 11px;'>" + "".join(rows) + "</table>"
+    return f"<b>{commune}</b><br>{table_html}"
+
+# === Création de la carte ===
+
 m = folium.Map(location=[48.5, 6.3], zoom_start=8, tiles="CartoDB positron")
 
-for commune in df_filtered["commune"].dropna().unique():
-    sub = df_filtered[df_filtered["commune"] == commune]
-    lat = sub["latitude"].iloc[0]
-    lon = sub["longitude"].iloc[0]
+if days <= 1:
+    agg = df_period.groupby("commune").agg({
+        "temp_ICON": "mean",
+        "hygro_ICON": "mean",
+        "pluvio_GFS": "sum"
+    }).reset_index()
 
-    popup_html = (
-        f"<b>{commune}</b><br>"
-        f"Température moyenne : {sub['temp_ICON'].mean():.1f} °C<br>"
-        f"Humidité moyenne : {sub['hygro_ICON'].mean():.1f} %<br>"
-        f"Précipitations totales : {sub['pluvio_GFS'].sum():.1f} mm"
-    )
-    folium.Marker([lat, lon], popup=popup_html, icon=folium.Icon(color="blue")).add_to(m)
+    for _, row in agg.iterrows():
+        commune = row['commune']
+        lat = df[df["commune"] == commune]["latitude"].iloc[0]
+        lon = df[df["commune"] == commune]["longitude"].iloc[0]
+        popup_html = make_popup_single(row)
 
-st_folium(m, width=700, height=500)
+        folium.Marker(
+            [lat, lon],
+            popup=folium.Popup(popup_html, max_width=350),
+            icon=folium.Icon(color="blue")
+        ).add_to(m)
+
+else:
+    temp_daily = df_period.groupby(["commune", "date_day"])["temp_ICON"].mean().unstack()
+    hygro_daily = df_period.groupby(["commune", "date_day"])["hygro_ICON"].mean().unstack()
+    pluvio_daily = df_period.groupby(["commune", "date_day"])["pluvio_GFS"].sum().unstack()
+    dates_sorted = sorted(df_period["date_day"].unique())
+
+    for commune in df_period["commune"].dropna().unique():
+        lat = df[df["commune"] == commune]["latitude"].iloc[0]
+        lon = df[df["commune"] == commune]["longitude"].iloc[0]
+        popup_html = make_popup_table(commune, temp_daily, hygro_daily, pluvio_daily, dates_sorted)
+
+        folium.Marker(
+            [lat, lon],
+            popup=folium.Popup(popup_html, max_width=350),
+            icon=folium.Icon(color="blue")
+        ).add_to(m)
+
+# Affichage final
+st_folium(m, width=900, height=600)
