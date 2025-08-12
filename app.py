@@ -23,7 +23,7 @@ CITIES = [
     {"name": "Saint-Dié-des-Vosges", "lat": 48.2910, "lon": 6.8990},
     {"name": "Bar-le-Duc", "lat": 48.7833, "lon": 5.1667},
     {"name": "Verdun", "lat": 49.1611, "lon": 5.3839},
-    {"name": "Étaules", "lat": 47.2923, "lon": 5.0550},       # Côte-d'Or (21)
+    {"name": "Étaules", "lat": 47.406861, "lon": 4.945035},       # Côte-d'Or (21)
     {"name": "Orléans", "lat": 47.9029, "lon": 1.9093},
     {"name": "Grenoble", "lat": 45.1885, "lon": 5.7245},
     {"name": "Dijon", "lat": 47.3220, "lon": 5.0415},
