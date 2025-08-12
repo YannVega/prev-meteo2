@@ -1,23 +1,26 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import folium
-from streamlit_folium import st_folium
-import requests
+# Liste des grandes villes du Grand Est avec coordonnées centre-ville
+GRAND_EST_CITIES = [
+    {"ville": "Strasbourg", "lat": 48.5734, "lon": 7.7521},
+    {"ville": "Metz", "lat": 49.1193, "lon": 6.1757},
+    {"ville": "Nancy", "lat": 48.6921, "lon": 6.1844},
+    {"ville": "Reims", "lat": 49.2583, "lon": 4.0317},
+    {"ville": "Mulhouse", "lat": 47.7508, "lon": 7.3359},
+    {"ville": "Colmar", "lat": 48.0794, "lon": 7.3585},
+    {"ville": "Charleville-Mézières", "lat": 49.7739, "lon": 4.7208},
+    {"ville": "Troyes", "lat": 48.2973, "lon": 4.0744},
+    {"ville": "Épinal", "lat": 48.1724, "lon": 6.4496},
+    {"ville": "Châlons-en-Champagne", "lat": 48.9562, "lon": 4.3674},
+]
 
-@st.cache_data(show_spinner="Chargement des données météo...")
-def get_weather_data():
-    lat_grid = np.arange(47.9, 49.5, 0.225)
-    lon_grid = np.arange(4.5, 7.3, 0.325)
-    grid_points = [(round(lat, 4), round(lon, 4)) for lat in lat_grid for lon in lon_grid]
-
+@st.cache_data(show_spinner="Chargement météo grandes villes...")
+def get_weather_data_cities():
     session = requests.Session()
     session.headers.update({"User-Agent": "meteo-grid-app"})
 
     results = []
-    for lat, lon in grid_points:
+    for city in GRAND_EST_CITIES:
         params = {
-            'latitude': lat, 'longitude': lon,
+            'latitude': city['lat'], 'longitude': city['lon'],
             'hourly': 'temperature_2m,precipitation',
             'models': 'icon_eu,gfs_global',
             'forecast_days': 7,
@@ -46,9 +49,11 @@ def get_weather_data():
                 'datetime': pd.to_datetime(time_idx),
                 'temp': temps,
                 'precip': precs,
-                'latitude': lat,
-                'longitude': lon
+                'latitude': city['lat'],
+                'longitude': city['lon'],
+                'ville': city['ville']
             })
+            df['date'] = df['datetime'].dt.date
             results.append(df)
         except:
             continue
@@ -56,87 +61,4 @@ def get_weather_data():
     if not results:
         return pd.DataFrame()
 
-    df_all = pd.concat(results, ignore_index=True)
-    df_all['date'] = df_all['datetime'].dt.date
-    return df_all
-
-# -------------------
-# Streamlit app
-# -------------------
-st.set_page_config(layout="wide")
-st.title("Prévisions météo - Min / Max / Moyenne + Pluviométrie journalière (coords uniquement)")
-
-df = get_weather_data()
-if df.empty:
-    st.error("Pas de données récupérées.")
-    st.stop()
-
-dates = sorted(df['date'].unique())
-min_d, max_d = dates[0], dates[-1]
-
-col1, col2 = st.columns(2)
-with col1:
-    start_date = st.date_input("Date début", min_d, min_value=min_d, max_value=max_d)
-with col2:
-    end_date = st.date_input("Date fin", max_d, min_value=min_d, max_value=max_d)
-
-if start_date > end_date:
-    st.warning("Date de début après date de fin.")
-    st.stop()
-
-df_period = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
-if df_period.empty:
-    st.warning("Aucune donnée pour cette période.")
-    st.stop()
-
-days = (end_date - start_date).days + 1
-
-# Agrégations journalières
-daily = df_period.groupby(['latitude', 'longitude', 'date']).agg(
-    temp_mean=('temp', 'mean'),
-    temp_min=('temp', 'min'),
-    temp_max=('temp', 'max'),
-    precip_sum=('precip', 'sum')
-).reset_index()
-
-def make_popup_single(row):
-    return (
-        f"Coordonnées : ({row['latitude']:.4f}, {row['longitude']:.4f})<br>"
-        f"Temp. moyenne : {row['temp_mean']:.2f} °C<br>"
-        f"Temp. min : {row['temp_min']:.2f} °C<br>"
-        f"Temp. max : {row['temp_max']:.2f} °C<br>"
-        f"Pluie totale : {row['precip_sum']:.2f} mm"
-    )
-
-# Carte
-m = folium.Map(location=[48.5, 6.3], zoom_start=8, tiles="CartoDB positron")
-
-if days == 1:
-    agg = daily.groupby(['latitude', 'longitude']).mean(numeric_only=True).reset_index()
-    for _, row in agg.iterrows():
-        folium.CircleMarker(
-            [row['latitude'], row['longitude']],
-            radius=4,
-            color='blue',
-            fill=True,
-            fill_color='blue',
-            popup=folium.Popup(make_popup_single(row), max_width=350)
-        ).add_to(m)
-else:
-    for (lat, lon), group in daily.groupby(['latitude', 'longitude']):
-        popup_html = f"<b>Coordonnées : ({lat:.4f}, {lon:.4f})</b><br>"
-        popup_html += "<table border='1' style='border-collapse:collapse;font-size:11px'>"
-        popup_html += "<tr><th>Date</th><th>Min °C</th><th>Max °C</th><th>Moy °C</th><th>Pluie mm</th></tr>"
-        for _, r in group.iterrows():
-            popup_html += f"<tr><td>{r['date']}</td><td>{r['temp_min']:.1f}</td><td>{r['temp_max']:.1f}</td><td>{r['temp_mean']:.1f}</td><td>{r['precip_sum']:.1f}</td></tr>"
-        popup_html += "</table>"
-        folium.CircleMarker(
-            [lat, lon],
-            radius=4,
-            color='green',
-            fill=True,
-            fill_color='green',
-            popup=folium.Popup(popup_html, max_width=800)
-        ).add_to(m)
-
-st_folium(m, width=1200, height=700)
+    return pd.concat(results, ignore_index=True)
