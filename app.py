@@ -43,7 +43,7 @@ def get_weather_data():
         url = (
             "https://api.open-meteo.com/v1/forecast"
             f"?latitude={lat}&longitude={lon}"
-            "&hourly=temperature_2m,relative_humidity_2m,precipitation"
+            "&hourly=temperature_2m,precipitation"
             "&models=icon_eu,gfs_global"
             "&forecast_days=7&timezone=Europe%2FParis"
         )
@@ -56,7 +56,6 @@ def get_weather_data():
             df = pd.DataFrame({
                 'datetime': pd.to_datetime(data['hourly']['time']),
                 'temp_ICON': data['hourly']['temperature_2m_icon_eu'],
-                'hygro_ICON': data['hourly']['relative_humidity_2m_icon_eu'],
                 'pluvio_GFS': data['hourly']['precipitation_gfs_global'],
             })
             df['latitude'] = lat
@@ -72,6 +71,8 @@ def get_weather_data():
         df_all = pd.concat(results, ignore_index=True)
         df_all = df_all[df_all["dept"].isin(["54", "55", "88"])].copy()
         df_all['date'] = df_all['datetime'].dt.date
+        df_all['temp_min'] = df_all.groupby('date')['temp_ICON'].transform('min')
+        df_all['temp_max'] = df_all.groupby('date')['temp_ICON'].transform('max')
         return df_all
     else:
         return pd.DataFrame()
@@ -114,11 +115,12 @@ def make_popup_single(row):
     return (
         f"<b>{row['commune']}</b><br>"
         f"Température moyenne : {row['temp_ICON']:.2f} °C<br>"
-        f"Humidité moyenne : {row['hygro_ICON']:.2f} %<br>"
+        f"Température minimale : {row['temp_min']:.2f} °C<br>"
+        f"Température maximale : {row['temp_max']:.2f} °C<br>"
         f"Précipitations totales : {row['pluvio_GFS']:.2f} mm"
     )
 
-def make_popup_table(commune, temp_df, hygro_df, pluvio_df, dates):
+def make_popup_table(commune, temp_min_df, temp_max_df, pluvio_df, dates):
     rows = []
     header = "<tr><th>Variable</th>" + "".join(f"<th>{d.strftime('%m-%d')}</th>" for d in dates) + "</tr>"
     rows.append(header)
@@ -134,12 +136,12 @@ def make_popup_table(commune, temp_df, hygro_df, pluvio_df, dates):
             cells.append(f"<td>{cell}</td>")
         return f"<tr><td>{label}</td>" + "".join(cells) + "</tr>"
 
-    rows.append(make_row("Température (°C)", temp_df))
-    rows.append(make_row("Humidité (%)", hygro_df))
+    rows.append(make_row("Température minimale (°C)", temp_min_df))
+    rows.append(make_row("Température maximale (°C)", temp_max_df))
     rows.append(make_row("Précipitations (mm)", pluvio_df))
 
     table_html = "<table border='1' style='border-collapse: collapse; font-size: 11px;'>" + "".join(rows) + "</table>"
-    return f"<b>{commune}</b><br>{table_html}"
+    return f"<b>{commune}</b><br>{{table_html}}"
 
 # === Création de la carte ===
 
@@ -148,7 +150,8 @@ m = folium.Map(location=[48.5, 6.3], zoom_start=8, tiles="CartoDB positron")
 if days <= 1:
     agg = df_period.groupby("commune").agg({
         "temp_ICON": "mean",
-        "hygro_ICON": "mean",
+        "temp_min": "mean",
+        "temp_max": "mean",
         "pluvio_GFS": "sum"
     }).reset_index()
 
@@ -165,21 +168,4 @@ if days <= 1:
         ).add_to(m)
 
 else:
-    temp_daily = df_period.groupby(["commune", "date_day"])["temp_ICON"].mean().unstack()
-    hygro_daily = df_period.groupby(["commune", "date_day"])["hygro_ICON"].mean().unstack()
-    pluvio_daily = df_period.groupby(["commune", "date_day"])["pluvio_GFS"].sum().unstack()
-    dates_sorted = sorted(df_period["date_day"].unique())
-
-    for commune in df_period["commune"].dropna().unique():
-        lat = df[df["commune"] == commune]["latitude"].iloc[0]
-        lon = df[df["commune"] == commune]["longitude"].iloc[0]
-        popup_html = make_popup_table(commune, temp_daily, hygro_daily, pluvio_daily, dates_sorted)
-
-        folium.Marker(
-            [lat, lon],
-            popup=folium.Popup(popup_html, max_width=350),
-            icon=folium.Icon(color="blue")
-        ).add_to(m)
-
-# Affichage final
-st_folium(m, width=900, height=600)
+    temp_min_daily = df_period.groupby(["commune", "date_day"])[
