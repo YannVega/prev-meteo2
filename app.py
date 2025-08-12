@@ -12,7 +12,6 @@ GRAND_EST_CITIES = [
     {"ville": "Châlons-en-Champagne", "lat": 48.9562, "lon": 4.3674},
 ]
 
-@st.cache_data(show_spinner="Chargement météo grandes villes...")
 def get_weather_data_cities():
     session = requests.Session()
     session.headers.update({"User-Agent": "meteo-grid-app"})
